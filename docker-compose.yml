@@ -1,0 +1,64 @@
+version: "3.9"
+
+# One-command local stack: SQL Server + backend API + frontend.
+# Usage: docker compose up --build
+# Frontend: http://localhost:3000   Backend/Swagger: http://localhost:5000/swagger
+#
+# NOTE: the backend runs the compiled API directly; it does not generate EF Core migrations
+# for you. Generate them once locally with `dotnet ef migrations add InitialCreate` (see
+# README section 6.2), or apply backend/database/init.sql manually against the `sqlserver`
+# service, before relying on the Docker backend to have a populated schema.
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: asms-sqlserver
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "YourStrong!Passw0rd"
+      MSSQL_PID: "Express"
+    ports:
+      - "1433:1433"
+    volumes:
+      - asms_mssql_data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  backend:
+    build:
+      context: ./backend
+    container_name: asms-backend
+    restart: unless-stopped
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=asms;User Id=sa;Password=YourStrong!Passw0rd;TrustServerCertificate=True"
+      Jwt__Key: "REPLACE_WITH_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS"
+      Jwt__Issuer: "AsmsApi"
+      Jwt__Audience: "AsmsClient"
+      Cors__AllowedOrigins__0: "http://localhost:3000"
+      EnableSwagger: "true"
+    ports:
+      - "5000:5000"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE_URL: "http://localhost:5000/api"
+    container_name: asms-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+
+volumes:
+  asms_mssql_data:
